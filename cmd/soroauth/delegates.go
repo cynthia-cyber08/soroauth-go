@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -34,6 +35,13 @@ rejected rather than silently rewrapped.
 Prints the wrapped entry as base64. With --json, prints a JSON object with field
 "wrapped_entry". On error, prints a JSON object with field "error" to stdout and
 exits non-zero.
+
+exit codes:
+  0  success
+  1  general error
+  2  usage error (missing --entry, --valid-until, --delegate, or malformed entry)
+  3  signing refused (unsupported credentials, already signed, duplicate delegate)
+  4  verification failed (invalid expiration)
 `
 
 type delegatesOutput struct {
@@ -70,7 +78,7 @@ func runDelegates(args []string, stdout, stderr io.Writer) error {
 	jsonFlag := flags.Bool("json", false, "output as JSON")
 
 	if err := flags.Parse(args); err != nil {
-		return err
+		return newErrorf(ExitUsageError, "%w", err)
 	}
 
 	entry, err := decodeEntry(*entryFlag)
@@ -78,10 +86,10 @@ func runDelegates(args []string, stdout, stderr io.Writer) error {
 		return writeJSONError(stdout, *jsonFlag, err)
 	}
 	if *validUntil == 0 {
-		return writeJSONError(stdout, *jsonFlag, fmt.Errorf("--valid-until is required and must be greater than zero"))
+		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "--valid-until is required and must be greater than zero"))
 	}
 	if len(delegates) == 0 {
-		return writeJSONError(stdout, *jsonFlag, fmt.Errorf("at least one --delegate is required"))
+		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "at least one --delegate is required"))
 	}
 
 	tree := make([]soroauth.Delegate, 0, len(delegates))
@@ -91,12 +99,23 @@ func runDelegates(args []string, stdout, stderr io.Writer) error {
 
 	wrapped, err := soroauth.WithDelegates(entry, uint32(*validUntil), tree, nil)
 	if err != nil {
-		return writeJSONError(stdout, *jsonFlag, err)
+		// Classify the error for exit code
+		var exitCode int
+		if errors.Is(err, soroauth.ErrUnsupportedCredentials) ||
+			errors.Is(err, soroauth.ErrAlreadySigned) ||
+			errors.Is(err, soroauth.ErrDuplicateDelegate) {
+			exitCode = ExitSigningRefusal
+		} else if errors.Is(err, soroauth.ErrInvalidExpiration) {
+			exitCode = ExitVerificationFailed
+		} else {
+			exitCode = ExitGeneralError
+		}
+		return writeJSONError(stdout, *jsonFlag, newErrorf(exitCode, "%w", err))
 	}
 
 	encoded, err := encodeEntry(wrapped)
 	if err != nil {
-		return writeJSONError(stdout, *jsonFlag, err)
+		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitGeneralError, "%w", err))
 	}
 
 	if *jsonFlag {

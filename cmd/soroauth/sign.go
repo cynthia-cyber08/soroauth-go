@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -29,6 +30,13 @@ command fails rather than signing something else.
 Prints the signed entry as base64. With --json, prints a JSON object with field
 "signed_entry". On error, prints a JSON object with field "error" to stdout and
 exits non-zero.
+
+exit codes:
+  0  success
+  1  general error
+  2  usage error (missing --entry, --valid-until, --network, --secret-env, or invalid seed)
+  3  signing refused (no matching node, already signed, source-account, unsupported credentials, duplicate delegate, missing signer)
+  4  verification failed (signature mismatch, invalid expiration, too many signatures)
 `
 
 type signOutput struct {
@@ -53,7 +61,7 @@ func runSign(args []string, stdout, stderr io.Writer, getenv func(string) string
 	jsonFlag := flags.Bool("json", false, "output as JSON")
 
 	if err := flags.Parse(args); err != nil {
-		return err
+		return newErrorf(ExitUsageError, "%w", err)
 	}
 
 	entry, err := decodeEntry(*entryFlag)
@@ -65,26 +73,26 @@ func runSign(args []string, stdout, stderr io.Writer, getenv func(string) string
 		return writeJSONError(stdout, *jsonFlag, err)
 	}
 	if *validUntil == 0 {
-		return writeJSONError(stdout, *jsonFlag, fmt.Errorf("--valid-until is required and must be greater than zero"))
+		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "--valid-until is required and must be greater than zero"))
 	}
 	if *secretEnv == "" {
-		return writeJSONError(stdout, *jsonFlag, fmt.Errorf("--secret-env is required: name the environment variable holding the seed"))
+		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "--secret-env is required: name the environment variable holding the seed"))
 	}
 
 	seed := getenv(*secretEnv)
 	if seed == "" {
-		return writeJSONError(stdout, *jsonFlag, fmt.Errorf("environment variable %s is empty or unset", *secretEnv))
+		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "environment variable %s is empty or unset", *secretEnv))
 	}
 
 	// keypair.Parse's error can quote what it was given, so it is deliberately
 	// not wrapped: the message names the variable, never its contents.
 	parsed, err := keypair.Parse(seed)
 	if err != nil {
-		return writeJSONError(stdout, *jsonFlag, fmt.Errorf("the value of %s is not a valid Stellar key", *secretEnv))
+		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "the value of %s is not a valid Stellar key", *secretEnv))
 	}
 	full, ok := parsed.(*keypair.Full)
 	if !ok {
-		return writeJSONError(stdout, *jsonFlag, fmt.Errorf("the value of %s is a public key; a secret seed (S…) is required", *secretEnv))
+		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "the value of %s is a public key; a secret seed (S…) is required", *secretEnv))
 	}
 
 	var opts []soroauth.AuthorizeOption
@@ -95,12 +103,29 @@ func runSign(args []string, stdout, stderr io.Writer, getenv func(string) string
 	signed, err := soroauth.AuthorizeEntry(context.Background(), entry,
 		soroauth.NewEd25519Signer(full), uint32(*validUntil), passphrase, opts...)
 	if err != nil {
-		return writeJSONError(stdout, *jsonFlag, err)
+		// Classify the error for exit code
+		var exitCode int
+		if errors.Is(err, soroauth.ErrNoMatchingCredentialNode) ||
+			errors.Is(err, soroauth.ErrAlreadySigned) ||
+			errors.Is(err, soroauth.ErrSourceAccountCredentials) ||
+			errors.Is(err, soroauth.ErrUnsupportedCredentials) ||
+			errors.Is(err, soroauth.ErrDuplicateDelegate) {
+			exitCode = ExitSigningRefusal
+		} else if errors.Is(err, soroauth.ErrSignatureMismatch) ||
+			errors.Is(err, soroauth.ErrInvalidExpiration) ||
+			errors.Is(err, soroauth.ErrTooManySignatures) {
+			exitCode = ExitVerificationFailed
+		} else if errors.Is(err, soroauth.ErrMissingSigner) {
+			exitCode = ExitSigningRefusal
+		} else {
+			exitCode = ExitGeneralError
+		}
+		return writeJSONError(stdout, *jsonFlag, newErrorf(exitCode, "%w", err))
 	}
 
 	encoded, err := encodeEntry(signed)
 	if err != nil {
-		return writeJSONError(stdout, *jsonFlag, err)
+		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitGeneralError, "%w", err))
 	}
 
 	if *jsonFlag {

@@ -22,6 +22,51 @@ import (
 	"github.com/stellar/go-stellar-sdk/xdr"
 )
 
+// Exit codes for distinct failure classes.
+const (
+	ExitOK                 = 0 // success
+	ExitGeneralError       = 1 // internal or unclassified error
+	ExitUsageError         = 2 // invalid flags, missing required flags, malformed input
+	ExitSigningRefusal     = 3 // refused to sign (no matching node, already signed, unsupported credentials, etc.)
+	ExitVerificationFailed = 4 // signature verification failed, invalid expiration, etc.
+)
+
+// cliError wraps an error with an exit code. It implements the error interface.
+type cliError struct {
+	err      error
+	exitCode int
+}
+
+func (e *cliError) Error() string {
+	return e.err.Error()
+}
+
+func (e *cliError) Unwrap() error {
+	return e.err
+}
+
+// ExitCode returns the exit code for this error, or ExitOK if err is nil.
+func ExitCode(err error) int {
+	if err == nil {
+		return ExitOK
+	}
+	var ce *cliError
+	if errors.As(err, &ce) {
+		return ce.exitCode
+	}
+	return ExitGeneralError
+}
+
+// newError wraps an error with the given exit code.
+func newError(exitCode int, format string, args ...any) error {
+	return &cliError{err: fmt.Errorf(format, args...), exitCode: exitCode}
+}
+
+// newErrorf wraps an error with the given exit code (alias for newError).
+func newErrorf(exitCode int, format string, args ...any) error {
+	return &cliError{err: fmt.Errorf(format, args...), exitCode: exitCode}
+}
+
 const usage = `soroauth builds, signs and inspects Soroban authorization entries.
 
 usage:
@@ -34,12 +79,19 @@ commands:
   inspect     print an entry's structure as JSON
 
 run "soroauth <command> -h" for the flags of a command.
+
+exit codes:
+  0  success
+  1  general error (internal or unclassified)
+  2  usage error (invalid flags, missing required flags, malformed input)
+  3  signing refused (no matching node, already signed, unsupported credentials, duplicate delegate)
+  4  verification failed (signature mismatch, invalid expiration, too many signatures)
 `
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr, os.Getenv); err != nil {
 		fmt.Fprintf(os.Stderr, "soroauth: %v\n", err)
-		os.Exit(1)
+		os.Exit(ExitCode(err))
 	}
 }
 
@@ -50,7 +102,7 @@ func main() {
 func run(args []string, stdout, stderr io.Writer, getenv func(string) string) error {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
-		return errors.New("no command given")
+		return newErrorf(ExitUsageError, "no command given")
 	}
 
 	switch args[0] {
@@ -67,7 +119,7 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) er
 		return nil
 	default:
 		fmt.Fprint(stderr, usage)
-		return fmt.Errorf("unknown command %q", args[0])
+		return newErrorf(ExitUsageError, "unknown command %q", args[0])
 	}
 }
 
@@ -78,7 +130,7 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) er
 func resolveNetwork(value string) (string, error) {
 	switch value {
 	case "":
-		return "", errors.New("--network is required (testnet, public, or a literal passphrase)")
+		return "", newErrorf(ExitUsageError, "--network is required (testnet, public, or a literal passphrase)")
 	case "testnet":
 		return network.TestNetworkPassphrase, nil
 	case "public":
@@ -91,11 +143,11 @@ func resolveNetwork(value string) (string, error) {
 // decodeEntry parses a base64 authorization entry from a flag value.
 func decodeEntry(value string) (xdr.SorobanAuthorizationEntry, error) {
 	if value == "" {
-		return xdr.SorobanAuthorizationEntry{}, errors.New("--entry is required")
+		return xdr.SorobanAuthorizationEntry{}, newErrorf(ExitUsageError, "--entry is required")
 	}
 	var entry xdr.SorobanAuthorizationEntry
 	if err := xdr.SafeUnmarshalBase64(value, &entry); err != nil {
-		return xdr.SorobanAuthorizationEntry{}, fmt.Errorf("decoding --entry: %w", err)
+		return xdr.SorobanAuthorizationEntry{}, newErrorf(ExitUsageError, "decoding --entry: %w", err)
 	}
 	return entry, nil
 }

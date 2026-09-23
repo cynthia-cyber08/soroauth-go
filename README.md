@@ -40,7 +40,23 @@ pipe the output to `jq` without stripping usage text.
 | `delegates` | `wrapped_entry` | `error` |
 | `inspect` | (the `EntryInfo` struct) | `error` |
 
-### Worked invocation — JSON output
+### Exit codes
+
+Each subcommand exits with a distinct code so scripts can tell *why* it failed:
+
+| code | name | meaning |
+|---|---|---|
+| 0 | success | the operation completed |
+| 1 | general error | internal or unclassified failure |
+| 2 | usage error | invalid flags, missing required flags, malformed input |
+| 3 | signing refused | no matching credential node, already signed, unsupported credentials, duplicate delegate, missing signer |
+| 4 | verification failed | signature mismatch, invalid expiration, too many signatures |
+
+The exit code is also available by checking the process exit status, or in
+library code by matching the sentinel errors with `errors.Is` (e.g.,
+`errors.Is(err, soroauth.ErrNoMatchingCredentialNode)` → exit code 3).
+
+### Worked invocation — JSON output and exit codes
 
 ```sh
 # What would this signer have to sign?
@@ -59,6 +75,16 @@ SEED=SABC... ./soroauth sign \
   --entry <base64> --valid-until 1234567 \
   --delegate GAAAA... --delegate GBBBB... --json |
   jq -r .wrapped_entry
+
+# Check exit code in a script
+./soroauth sign --entry "$ENTRY" --valid-until 1234567 --network testnet --secret-env SEED --json
+case $? in
+  0) echo "signed OK" ;;
+  2) echo "bad invocation — check your flags" ;;
+  3) echo "refused to sign — wrong key or entry already signed" ;;
+  4) echo "verification failed — signature or expiration problem" ;;
+  *) echo "unexpected error" ;;
+esac
 ```
 
 ### Release workflow
