@@ -100,6 +100,29 @@ runs on version tags (`v*`). It:
    the tagged version.
 4. Attaches all six binaries to the release.
 
+### CI cross-compilation
+
+Every pull request runs a cross-compilation job (`.github/workflows/ci.yml`)
+that builds the CLI for the same five release targets:
+
+- `linux/amd64`
+- `linux/arm64`
+- `darwin/amd64`
+- `darwin/arm64`
+- `windows/amd64`
+
+The job is build-only (no tests, no artifacts uploaded) and runs in parallel
+with a 5-minute timeout per platform. A failure names the platform in the job
+summary, so a broken build on a platform nobody develops on is caught before
+merge, not at release time.
+
+To reproduce a cross-compile failure locally:
+
+```sh
+GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" ./cmd/soroauth
+./soroauth help
+```
+
 To cut a release:
 
 ```sh
