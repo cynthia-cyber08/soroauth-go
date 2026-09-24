@@ -205,13 +205,13 @@ func isValidGOOS(s string) bool {
 
 func isValidGOARCH(s string) bool {
 	valid := map[string]bool{
-		"amd64":  true,
-		"arm64":  true,
-		"386":    true,
-		"arm":    true,
-		"ppc64":  true,
+		"amd64":   true,
+		"arm64":   true,
+		"386":     true,
+		"arm":     true,
+		"ppc64":   true,
 		"ppc64le": true,
-		"s390x":  true,
+		"s390x":   true,
 		"riscv64": true,
 	}
 	return valid[s]
