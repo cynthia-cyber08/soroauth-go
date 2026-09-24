@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -24,13 +23,6 @@ what an offline or hardware signer is being asked to approve.
 
 With --json, prints a single JSON object with fields "preimage" and "payload".
 On error, prints a JSON object with field "error" to stdout and exits non-zero.
-
-exit codes:
-  0  success
-  1  general error
-  2  usage error (missing --entry, --valid-until, --network, or malformed entry)
-  3  signing refused (source-account credentials, unsupported credentials type)
-  4  verification failed
 `
 
 type payloadOutput struct {
@@ -66,27 +58,20 @@ func runPayload(args []string, stdout, stderr io.Writer) error {
 		return writeJSONError(stdout, *jsonFlag, err)
 	}
 	if *validUntil == 0 {
-		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "--valid-until is required and must be greater than zero"))
+		return writeJSONError(stdout, *jsonFlag, fmt.Errorf("--valid-until is required and must be greater than zero"))
 	}
 
 	preimage, err := soroauth.Preimage(entry, uint32(*validUntil), passphrase)
 	if err != nil {
-		// Classify the error for exit code
-		var exitCode int
-		if errors.Is(err, soroauth.ErrSourceAccountCredentials) || errors.Is(err, soroauth.ErrUnsupportedCredentials) {
-			exitCode = ExitSigningRefusal
-		} else {
-			exitCode = ExitVerificationFailed
-		}
-		return writeJSONError(stdout, *jsonFlag, newErrorf(exitCode, "%w", err))
+		return writeJSONError(stdout, *jsonFlag, err)
 	}
 	payload, err := soroauth.Payload(preimage)
 	if err != nil {
-		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitVerificationFailed, "%w", err))
+		return writeJSONError(stdout, *jsonFlag, err)
 	}
 	encoded, err := xdr.MarshalBase64(preimage)
 	if err != nil {
-		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitGeneralError, "encoding the preimage: %w", err))
+		return writeJSONError(stdout, *jsonFlag, fmt.Errorf("encoding the preimage: %w", err))
 	}
 
 	if *jsonFlag {
