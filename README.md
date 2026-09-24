@@ -26,6 +26,121 @@ go install github.com/soroauth/soroauth-go/cmd/soroauth@latest
 Requires Go 1.25.0 or later, and `github.com/stellar/go-stellar-sdk` v0.7.3 or
 later.
 
+## CLI
+
+Every subcommand accepts `--json` to emit a single JSON object on stdout. On
+success the object carries the result fields; on failure it carries an `error`
+field. Nothing else is written to stdout in JSON mode, so scripts can safely
+pipe the output to `jq` without stripping usage text.
+
+| subcommand | success fields | failure field |
+|---|---|---|
+| `payload` | `preimage`, `payload` | `error` |
+| `sign` | `signed_entry` | `error` |
+| `delegates` | `wrapped_entry` | `error` |
+| `inspect` | (the `EntryInfo` struct) | `error` |
+| `cross-compile` | `target`, `size`, `sha256` (one per line) | `error` |
+
+### Worked invocation — JSON output
+
+```sh
+# What would this signer have to sign?
+SEED=SABC... ./soroauth payload \
+  --entry <base64> --valid-until 1234567 --network testnet --json |
+  jq -r .payload
+
+# Sign and get the entry back as JSON
+SEED=SABC... ./soroauth sign \
+  --entry <base64> --valid-until 1234567 --network testnet \
+  --secret-env SEED --json |
+  jq -r .signed_entry
+
+# Wrap an entry with delegates, JSON out
+./soroauth delegates \
+  --entry <base64> --valid-until 1234567 \
+  --delegate GAAAA... --delegate GBBBB... --json |
+  jq -r .wrapped_entry
+```
+
+### Cross-compile — build binaries for multiple targets
+
+The `cross-compile` subcommand builds soroauth for any GOOS/GOARCH pair. It is
+useful for creating release artifacts or verifying that the codebase compiles
+cleanly on all targets.
+
+```sh
+# Human-readable output for the default matrix (all 5 release targets)
+./soroauth cross-compile
+
+# Build only linux/amd64 and windows/amd64, emit JSON (one object per line)
+./soroauth cross-compile --targets linux/amd64,windows/amd64 --json
+
+# Write binaries to a directory instead of just printing metadata
+./soroauth cross-compile --targets linux/amd64 --output-dir ./dist
+```
+
+Sample JSON output:
+
+```json
+{"target":{"goos":"linux","goarch":"amd64","binary":"soroauth"},"size":4190368,"sha256":"1d214924a4717228e2c0b694c4b4d3c3077c29ed036d9b00805e431b4a6e8433"}
+{"target":{"goos":"windows","goarch":"amd64","binary":"soroauth.exe"},"size":4308992,"sha256":"d241d7f7ab8ff20215fbb254abc4eb71643408f62cffc3c0989e552801ae75e4"}
+```
+
+On error, JSON mode emits a single object to stdout with an `error` field
+(and nothing to stderr):
+
+```json
+{"target":{"goos":"invalid","goarch":"target","binary":""},"error":"invalid target \"invalid/target\": unknown GOOS/GOARCH"}
+```
+
+#### CI cross-compilation matrix
+
+The CI workflow (`.github/workflows/ci.yml`) includes a `cross-compile` job
+that runs on every push and PR. It builds for the five release targets in
+parallel with a 5-minute timeout per platform:
+
+- `linux/amd64`
+- `linux/arm64`
+- `darwin/amd64`
+- `darwin/arm64`
+- `windows/amd64`
+
+The job is build-only (no tests, no artifacts uploaded) and runs a smoke test
+(`./soroauth help`) on the native platform to verify the binary runs. Failures
+are named by platform in the workflow UI.
+
+To reproduce a CI failure locally:
+
+```sh
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o soroauth-arm64 ./cmd/soroauth
+./soroauth-arm64 help
+```
+
+### Release workflow
+
+The project uses a GitHub Actions workflow (`.github/workflows/release.yml`) that
+runs on version tags (`v*`). It:
+
+1. Regenerates the golden vectors from the pinned JS SDK and fails if they
+   drift (the same check that runs on every push).
+2. Builds the CLI for `linux/amd64`, `linux/arm64`, `darwin/amd64`,
+   `darwin/arm64`, `windows/amd64`.
+3. Creates a GitHub Release whose notes are extracted from `CHANGELOG.md` for
+   the tagged version.
+4. Attaches all six binaries to the release.
+
+To cut a release:
+
+```sh
+# Update CHANGELOG.md with the new version's entries
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The workflow will refuse to publish if the golden drift check fails, so a
+release is only created when the library is provably byte-identical to the
+reference implementation.
+
 ## Quickstart
 
 Simulation tells you which addresses must authorize a call. Hand those entries

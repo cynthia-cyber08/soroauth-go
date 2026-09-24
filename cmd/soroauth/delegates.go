@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -12,7 +14,7 @@ const delegatesUsage = `soroauth delegates — wrap an entry in a delegated-sign
 
 usage:
   soroauth delegates --entry <base64> --valid-until <ledger> \
-                     --delegate <address> [--delegate <address> ...]
+                     --delegate <address> [--delegate <address> ...] [--json]
 
 Converts an ADDRESS or ADDRESS_V2 entry into ADDRESS_WITH_DELEGATES (CAP-71-01),
 with the delegates sorted into the order the protocol requires. Pass --delegate
@@ -30,8 +32,15 @@ Note that wrapping a legacy ADDRESS entry makes its payload address-bound, so
 any signature already on the entry would stop verifying; such an entry is
 rejected rather than silently rewrapped.
 
-Prints the wrapped entry as base64.
+Prints the wrapped entry as base64. With --json, prints a JSON object with field
+"wrapped_entry". On error, prints a JSON object with field "error" to stdout and
+exits non-zero.
 `
+
+type delegatesOutput struct {
+	WrappedEntry string `json:"wrapped_entry,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
 
 // addressList collects a flag that may be repeated.
 type addressList []string
@@ -59,20 +68,21 @@ func runDelegates(args []string, stdout, stderr io.Writer) error {
 	validUntil := flags.Uint("valid-until", 0, "the last ledger at which the signatures are valid")
 	var delegates addressList
 	flags.Var(&delegates, "delegate", "a delegate address; repeat for several")
+	jsonFlag := flags.Bool("json", false, "output as JSON")
 
 	if err := flags.Parse(args); err != nil {
-		return err
+		return newErrorf(ExitUsageError, "%w", err)
 	}
 
 	entry, err := decodeEntry(*entryFlag)
 	if err != nil {
-		return err
+		return writeJSONError(stdout, *jsonFlag, err)
 	}
 	if *validUntil == 0 {
-		return fmt.Errorf("--valid-until is required and must be greater than zero")
+		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "--valid-until is required and must be greater than zero"))
 	}
 	if len(delegates) == 0 {
-		return fmt.Errorf("at least one --delegate is required")
+		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitUsageError, "at least one --delegate is required"))
 	}
 
 	tree := make([]soroauth.Delegate, 0, len(delegates))
@@ -82,13 +92,32 @@ func runDelegates(args []string, stdout, stderr io.Writer) error {
 
 	wrapped, err := soroauth.WithDelegates(entry, uint32(*validUntil), tree, nil)
 	if err != nil {
-		return err
+		// Classify the error for exit code
+		var exitCode int
+		if errors.Is(err, soroauth.ErrUnsupportedCredentials) ||
+			errors.Is(err, soroauth.ErrAlreadySigned) ||
+			errors.Is(err, soroauth.ErrDuplicateDelegate) {
+			exitCode = ExitSigningRefusal
+		} else if errors.Is(err, soroauth.ErrInvalidExpiration) {
+			exitCode = ExitVerificationFailed
+		} else {
+			exitCode = ExitGeneralError
+		}
+		return writeJSONError(stdout, *jsonFlag, newErrorf(exitCode, "%w", err))
 	}
 
 	encoded, err := encodeEntry(wrapped)
 	if err != nil {
-		return err
+		return writeJSONError(stdout, *jsonFlag, newErrorf(ExitGeneralError, "%w", err))
 	}
+
+	if *jsonFlag {
+		out := delegatesOutput{WrappedEntry: encoded}
+		enc := json.NewEncoder(stdout)
+		enc.SetEscapeHTML(false)
+		return enc.Encode(out)
+	}
+
 	fmt.Fprintln(stdout, encoded)
 	return nil
 }
