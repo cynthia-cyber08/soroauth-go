@@ -30,13 +30,6 @@ command fails rather than signing something else.
 Prints the signed entry as base64. With --json, prints a JSON object with field
 "signed_entry". On error, prints a JSON object with field "error" to stdout and
 exits non-zero.
-
-exit codes:
-  0  success
-  1  general error
-  2  usage error (missing --entry, --valid-until, --network, --secret-env, or invalid seed)
-  3  signing refused (no matching node, already signed, source-account, unsupported credentials, duplicate delegate, missing signer)
-  4  verification failed (signature mismatch, invalid expiration, too many signatures)
 `
 
 type signOutput struct {

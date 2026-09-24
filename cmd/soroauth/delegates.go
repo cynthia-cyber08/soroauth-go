@@ -35,13 +35,6 @@ rejected rather than silently rewrapped.
 Prints the wrapped entry as base64. With --json, prints a JSON object with field
 "wrapped_entry". On error, prints a JSON object with field "error" to stdout and
 exits non-zero.
-
-exit codes:
-  0  success
-  1  general error
-  2  usage error (missing --entry, --valid-until, --delegate, or malformed entry)
-  3  signing refused (unsupported credentials, already signed, duplicate delegate)
-  4  verification failed (invalid expiration)
 `
 
 type delegatesOutput struct {

@@ -89,8 +89,14 @@ exit codes:
 `
 
 func main() {
-	if err := run(os.Args[1:], os.Stdout, os.Stderr, os.Getenv); err != nil {
-		fmt.Fprintf(os.Stderr, "soroauth: %v\n", err)
+	err := run(os.Args[1:], os.Stdout, os.Stderr, os.Getenv)
+	if err != nil {
+		// If the error was already written as JSON to stdout by writeJSONError,
+		// don't print to stderr again.
+		var jsonHandled *jsonErrorHandled
+		if !errors.As(err, &jsonHandled) {
+			fmt.Fprintf(os.Stderr, "soroauth: %v\n", err)
+		}
 		os.Exit(ExitCode(err))
 	}
 }
@@ -161,8 +167,17 @@ func encodeEntry(entry xdr.SorobanAuthorizationEntry) (string, error) {
 	return encoded, nil
 }
 
+// jsonErrorHandled is a sentinel error returned by writeJSONError when it has
+// already written the error as JSON to stdout. main() checks for this and
+// skips printing to stderr.
+type jsonErrorHandled struct{ error }
+
+func (e *jsonErrorHandled) Unwrap() error { return e.error }
+
 // writeJSONError writes a JSON error object to stdout if jsonFlag is true,
 // otherwise returns the error for the caller to print to stderr.
+// When jsonFlag is true, it returns a jsonErrorHandled sentinel so that
+// main() knows not to print to stderr again.
 func writeJSONError(stdout io.Writer, jsonFlag bool, err error) error {
 	if jsonFlag {
 		type jsonError struct {
@@ -171,6 +186,7 @@ func writeJSONError(stdout io.Writer, jsonFlag bool, err error) error {
 		enc := json.NewEncoder(stdout)
 		enc.SetEscapeHTML(false)
 		_ = enc.Encode(jsonError{Error: err.Error()})
+		return &jsonErrorHandled{err}
 	}
 	return err
 }
