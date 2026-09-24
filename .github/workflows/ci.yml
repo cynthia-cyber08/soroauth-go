@@ -64,8 +64,10 @@ jobs:
             binary_name=soroauth.exe
           fi
           go build -ldflags="-s -w" -o "${binary_name}" ./cmd/soroauth
-          # Smoke test: run --help to verify the binary runs
-          ./${binary_name} help >/dev/null
+          # Smoke test: run --help to verify the binary runs (only for native platform)
+          if [ "${{ matrix.goos }}" = "linux" ] && [ "${{ matrix.goarch }}" = "amd64" ]; then
+            ./${binary_name} help >/dev/null
+          fi
         timeout-minutes: 5
 
   golden-drift:
